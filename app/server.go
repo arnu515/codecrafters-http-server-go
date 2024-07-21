@@ -71,6 +71,7 @@ func parseRequest(req []byte) (*HTTP1_1Request, error) {
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
+	fmt.Printf("Received TCP Connection from %s\n", conn.RemoteAddr())
 
 	b := make([]byte, 1024)
 	_, err := conn.Read(b)
