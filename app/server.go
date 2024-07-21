@@ -78,7 +78,12 @@ func handleConnection(conn net.Conn) {
 	if req.Path == "/" {
 		conn.Write([]byte(NewResponse("200 OK", nil, []byte{})))
 	} else {
-		conn.Write([]byte(NewResponse("404 Not Found", nil, []byte{})))
+		str, ok := strings.CutPrefix(req.Path, "/echo/")
+		if ok {
+			conn.Write([]byte(NewResponse("200 OK", map[string]string{"content-type": "text/plain"}, []byte(str))))
+		} else {
+			conn.Write([]byte(NewResponse("404 Not Found", nil, []byte{})))
+		}
 	}
 }
 
