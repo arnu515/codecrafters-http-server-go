@@ -15,8 +15,19 @@ type HTTP1_1Request struct {
 	Body    []byte
 }
 
-func NewResponse(status string) string {
-	return fmt.Sprintf("HTTP/1.1 %s\r\n\r\n", status)
+func NewResponse(status string, headers map[string]string, body []byte) string {
+	headersStr := ""
+	if headers != nil {
+		for k, v := range headers {
+			headersStr += fmt.Sprintf("%s: %s\r\n", strings.ToLower(k), v)
+		}
+	}
+	headersStr += fmt.Sprintf("content-length: %d\r\n", len(body))
+	return fmt.Sprintf("HTTP/1.1 %s\r\n%s\r\n%s", status, headersStr, string(body))
+}
+
+func ErrToRes(err error, status string) string {
+	return NewResponse(status, map[string]string{"Content-Type": "text/plain"}, []byte(err.Error()))
 }
 
 func parseFirstLine(line string) (string, string, error) {
@@ -60,14 +71,14 @@ func handleConnection(conn net.Conn) {
 	req, err := parseRequest(b)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not parse HTTP request from TCP connection %s: %s\n", conn.RemoteAddr().String(), err)
-		conn.Write([]byte(NewResponse("422 Unprocessable Content")))
+		conn.Write([]byte(ErrToRes(err, "422 Unprocessable Entity")))
 		return
 	}
 
 	if req.Path == "/" {
-		conn.Write([]byte(NewResponse("200 OK")))
+		conn.Write([]byte(NewResponse("200 OK", nil, []byte{})))
 	} else {
-		conn.Write([]byte(NewResponse("404 Not Found")))
+		conn.Write([]byte(NewResponse("404 Not Found", nil, []byte{})))
 	}
 }
 
