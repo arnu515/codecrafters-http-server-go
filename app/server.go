@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"errors"
 	"flag"
 	"fmt"
@@ -65,12 +67,24 @@ func (r *Res) String(enc bool) string {
 			headersStr += fmt.Sprintf("%s: %s\r\n", strings.ToLower(k), v)
 		}
 	}
-	headersStr += fmt.Sprintf("content-length: %d\r\n", len(r.Body))
 	if r.CType != "" {
 		headersStr += fmt.Sprintf("content-type: %s\r\n", r.CType)
 	}
 	if enc {
 		headersStr += "content-encoding: gzip\r\n"
+		buf := new(bytes.Buffer)
+		gzWriter := gzip.NewWriter(buf)
+		_, err := gzWriter.Write(r.Body)
+		gzWriter.Close()
+		if err == nil {
+			b := buf.Bytes()
+			headersStr += fmt.Sprintf("content-length: %d\r\n", len(b))
+			return fmt.Sprintf("HTTP/1.1 %d %s\r\n%s\r\n%s", r.Status, r.StatusText(), headersStr, string(b))
+		} else {
+			fmt.Fprintln(os.Stderr, "Could not compress to gzip:", err)
+		}
+	} else {
+		headersStr += fmt.Sprintf("content-length: %d\r\n", len(r.Body))
 	}
 	return fmt.Sprintf("HTTP/1.1 %d %s\r\n%s\r\n%s", r.Status, r.StatusText(), headersStr, string(r.Body))
 }
