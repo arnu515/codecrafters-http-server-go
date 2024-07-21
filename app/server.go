@@ -75,6 +75,7 @@ func parseRequest(req []byte) (*HTTP1_1Request, error) {
 		Method:  method,
 		Path:    path,
 		Headers: headers,
+		Body:    []byte(split[1]),
 	}, nil
 }
 
@@ -97,6 +98,15 @@ func handleSendFile(conn net.Conn, p string) {
 		conn.Write([]byte(NewResponse("500 Internal Server Error", PLAIN, []byte(err.Error()))))
 	}
 	conn.Write([]byte(NewResponse("200 OK", map[string]string{"content-type": "application/octet-stream"}, []byte(data))))
+}
+
+func handleCreateFile(conn net.Conn, p string, content []byte) {
+	err := os.WriteFile(p, content, 0600)
+	if err != nil {
+		conn.Write([]byte(NewResponse("500 Internal Server Error", PLAIN, []byte(err.Error()))))
+	} else {
+		conn.Write([]byte(NewResponse("201 Created", PLAIN, []byte{})))
+	}
 }
 
 func handleConnection(conn net.Conn) {
@@ -127,7 +137,15 @@ func handleConnection(conn net.Conn) {
 		if echoOk {
 			conn.Write([]byte(NewResponse("200 OK", PLAIN, []byte(echoStr))))
 		} else if filesOk && directory[0] == '/' {
-			handleSendFile(conn, path.Join(directory, filesStr))
+			p := path.Join(directory, filesStr)
+			if req.Method == "GET" {
+				handleSendFile(conn, p)
+			} else if req.Method == "POST" {
+				println(string(req.Body), len(req.Body))
+				handleCreateFile(conn, p, req.Body)
+			} else {
+				conn.Write([]byte(NewResponse("405 Method Not Allowed", nil, []byte{})))
+			}
 		} else {
 			conn.Write([]byte(NewResponse("404 Not Found", nil, []byte{})))
 		}
