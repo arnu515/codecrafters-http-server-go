@@ -96,7 +96,7 @@ func handleSendFile(conn net.Conn, p string) {
 	if err != nil {
 		conn.Write([]byte(NewResponse("500 Internal Server Error", PLAIN, []byte(err.Error()))))
 	}
-	conn.Write([]byte(NewResponse("200 OK", PLAIN, []byte(data))))
+	conn.Write([]byte(NewResponse("200 OK", map[string]string{"content-type": "application/octet-stream"}, []byte(data))))
 }
 
 func handleConnection(conn net.Conn) {
