@@ -186,7 +186,7 @@ func handleConnection(conn net.Conn) {
 		fmt.Fprintf(os.Stderr, "Could not parse HTTP request from TCP connection %s: %s\n", conn.RemoteAddr().String(), err)
 		conn.Write([]byte((ErrRes(err, 422)).String(false)))
 	}
-	enc := req.Headers["accept-encoding"] == "gzip"
+	enc := strings.Contains(req.Headers["accept-encoding"], "gzip")
 
 	if req.Path == "/" {
 		conn.Write([]byte((&Res{Status: 200}).String(enc)))
