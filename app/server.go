@@ -120,6 +120,13 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
+	for i, v := range b {
+		if v == 0 {
+			b = b[:i]
+			break
+		}
+	}
+
 	req, err := parseRequest(b)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not parse HTTP request from TCP connection %s: %s\n", conn.RemoteAddr().String(), err)
@@ -141,7 +148,6 @@ func handleConnection(conn net.Conn) {
 			if req.Method == "GET" {
 				handleSendFile(conn, p)
 			} else if req.Method == "POST" {
-				println(string(req.Body), len(req.Body))
 				handleCreateFile(conn, p, req.Body)
 			} else {
 				conn.Write([]byte(NewResponse("405 Method Not Allowed", nil, []byte{})))
