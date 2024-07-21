@@ -2,9 +2,12 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
+	"path"
 	"strings"
 )
 
@@ -16,6 +19,12 @@ type HTTP1_1Request struct {
 }
 
 var PLAIN = map[string]string{"content-type": "text/plain"}
+var directory string
+
+func init() {
+	flag.StringVar(&directory, "directory", "", "Directory where files are located")
+	flag.Parse()
+}
 
 func NewResponse(status string, headers map[string]string, body []byte) string {
 	headersStr := ""
@@ -69,6 +78,27 @@ func parseRequest(req []byte) (*HTTP1_1Request, error) {
 	}, nil
 }
 
+func handleSendFile(conn net.Conn, p string) {
+	stat, err := os.Stat(p)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			conn.Write([]byte(NewResponse("404 Not Found", nil, []byte{})))
+		} else {
+			conn.Write([]byte(NewResponse("500 Internal Server Error", PLAIN, []byte(err.Error()))))
+		}
+		return
+	}
+	if stat.IsDir() {
+		conn.Write([]byte(NewResponse("404 Not Found", nil, []byte{})))
+		return
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		conn.Write([]byte(NewResponse("500 Internal Server Error", PLAIN, []byte(err.Error()))))
+	}
+	conn.Write([]byte(NewResponse("200 OK", PLAIN, []byte(data))))
+}
+
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 	fmt.Printf("Received TCP Connection from %s\n", conn.RemoteAddr())
@@ -92,9 +122,12 @@ func handleConnection(conn net.Conn) {
 	} else if req.Path == "/user-agent" {
 		conn.Write([]byte(NewResponse("200 OK", PLAIN, []byte(req.Headers["user-agent"]))))
 	} else {
-		str, ok := strings.CutPrefix(req.Path, "/echo/")
-		if ok {
-			conn.Write([]byte(NewResponse("200 OK", PLAIN, []byte(str))))
+		echoStr, echoOk := strings.CutPrefix(req.Path, "/echo/")
+		filesStr, filesOk := strings.CutPrefix(req.Path, "/files/")
+		if echoOk {
+			conn.Write([]byte(NewResponse("200 OK", PLAIN, []byte(echoStr))))
+		} else if filesOk && directory[0] == '/' {
+			handleSendFile(conn, path.Join(directory, filesStr))
 		} else {
 			conn.Write([]byte(NewResponse("404 Not Found", nil, []byte{})))
 		}
