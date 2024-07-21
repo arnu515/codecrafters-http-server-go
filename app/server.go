@@ -11,14 +11,6 @@ import (
 	"strings"
 )
 
-type HTTP1_1Request struct {
-	Method  string
-	Path    string
-	Headers map[string]string
-	Body    []byte
-}
-
-var PLAIN = map[string]string{"content-type": "text/plain"}
 var directory string
 
 func init() {
@@ -26,19 +18,79 @@ func init() {
 	flag.Parse()
 }
 
-func NewResponse(status string, headers map[string]string, body []byte) string {
+type Req struct {
+	Method  string
+	Path    string
+	Headers map[string]string
+	Body    []byte
+}
+
+type Res struct {
+	Status  uint
+	CType   string
+	Headers map[string]string
+	Body    []byte
+}
+
+func (r *Res) StatusText() string {
+	switch r.Status {
+	case 200:
+		return "OK"
+	case 201:
+		return "Created"
+	case 400:
+		return "Bad Request"
+	case 404:
+		return "Not Found"
+	case 405:
+		return "Method Not Allowed"
+	case 422:
+		return "Unprocessable Entity"
+	case 500:
+		return "Internal Server Error"
+	default:
+		return ""
+	}
+}
+
+func (r *Res) String(enc bool) string {
 	headersStr := ""
-	if headers != nil {
-		for k, v := range headers {
+	if r.Headers != nil {
+		// remove content-{encoding,length,type} from headers
+		delete(r.Headers, "content-encoding")
+		delete(r.Headers, "content-length")
+		delete(r.Headers, "content-type")
+
+		for k, v := range r.Headers {
 			headersStr += fmt.Sprintf("%s: %s\r\n", strings.ToLower(k), v)
 		}
 	}
-	headersStr += fmt.Sprintf("content-length: %d\r\n", len(body))
-	return fmt.Sprintf("HTTP/1.1 %s\r\n%s\r\n%s", status, headersStr, string(body))
+	headersStr += fmt.Sprintf("content-length: %d\r\n", len(r.Body))
+	if r.CType != "" {
+		headersStr += fmt.Sprintf("content-type: %s\r\n", r.CType)
+	}
+	if enc {
+		headersStr += "content-encoding: gzip\r\n"
+	}
+	return fmt.Sprintf("HTTP/1.1 %d %s\r\n%s\r\n%s", r.Status, r.StatusText(), headersStr, string(r.Body))
 }
 
-func ErrToRes(err error, status string) string {
-	return NewResponse(status, PLAIN, []byte(err.Error()))
+func ErrRes(err error, status uint) *Res {
+	return &Res{
+		Status: status,
+		CType:  "text/plain",
+		Body:   []byte(err.Error()),
+	}
+}
+
+func h(contentType string, enc bool) map[string]string {
+	headers := map[string]string{
+		"content-type": contentType,
+	}
+	if enc {
+		headers["content-encoding"] = "gzip"
+	}
+	return headers
 }
 
 func parseFirstLine(line string) (string, string, error) {
@@ -61,7 +113,7 @@ func parseHeaders(headersRaw string) map[string]string {
 	return headers
 }
 
-func parseRequest(req []byte) (*HTTP1_1Request, error) {
+func parseRequest(req []byte) (*Req, error) {
 	// split[0] = first line and headers ; split[1] = body
 	split := strings.SplitN(string(req), "\r\n\r\n", 2)
 	// split2[0] = first line ; split2[1] = headers
@@ -71,7 +123,7 @@ func parseRequest(req []byte) (*HTTP1_1Request, error) {
 		return nil, err
 	}
 	headers := parseHeaders(split2[1])
-	return &HTTP1_1Request{
+	return &Req{
 		Method:  method,
 		Path:    path,
 		Headers: headers,
@@ -79,33 +131,35 @@ func parseRequest(req []byte) (*HTTP1_1Request, error) {
 	}, nil
 }
 
-func handleSendFile(conn net.Conn, p string) {
+func handleSendFile(p string) *Res {
 	stat, err := os.Stat(p)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			conn.Write([]byte(NewResponse("404 Not Found", nil, []byte{})))
+			return &Res{Status: 404}
 		} else {
-			conn.Write([]byte(NewResponse("500 Internal Server Error", PLAIN, []byte(err.Error()))))
+			return ErrRes(err, 500)
 		}
-		return
 	}
 	if stat.IsDir() {
-		conn.Write([]byte(NewResponse("404 Not Found", nil, []byte{})))
-		return
+		return &Res{Status: 404}
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
-		conn.Write([]byte(NewResponse("500 Internal Server Error", PLAIN, []byte(err.Error()))))
+		return ErrRes(err, 500)
 	}
-	conn.Write([]byte(NewResponse("200 OK", map[string]string{"content-type": "application/octet-stream"}, []byte(data))))
+	return &Res{
+		Status: 200,
+		CType:  "application/octet-stream",
+		Body:   []byte(data),
+	}
 }
 
-func handleCreateFile(conn net.Conn, p string, content []byte) {
+func handleCreateFile(p string, content []byte) *Res {
 	err := os.WriteFile(p, content, 0600)
 	if err != nil {
-		conn.Write([]byte(NewResponse("500 Internal Server Error", PLAIN, []byte(err.Error()))))
+		return ErrRes(err, 500)
 	} else {
-		conn.Write([]byte(NewResponse("201 Created", PLAIN, []byte{})))
+		return &Res{Status: 201}
 	}
 }
 
@@ -130,30 +184,38 @@ func handleConnection(conn net.Conn) {
 	req, err := parseRequest(b)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not parse HTTP request from TCP connection %s: %s\n", conn.RemoteAddr().String(), err)
-		conn.Write([]byte(ErrToRes(err, "422 Unprocessable Entity")))
-		return
+		conn.Write([]byte((ErrRes(err, 422)).String(false)))
 	}
+	enc := req.Headers["accept-encoding"] == "gzip"
 
 	if req.Path == "/" {
-		conn.Write([]byte(NewResponse("200 OK", nil, []byte{})))
+		conn.Write([]byte((&Res{Status: 200}).String(enc)))
 	} else if req.Path == "/user-agent" {
-		conn.Write([]byte(NewResponse("200 OK", PLAIN, []byte(req.Headers["user-agent"]))))
+		conn.Write([]byte((&Res{
+			Status: 200,
+			CType:  "text/plain",
+			Body:   []byte(req.Headers["user-agent"]),
+		}).String(enc)))
 	} else {
 		echoStr, echoOk := strings.CutPrefix(req.Path, "/echo/")
 		filesStr, filesOk := strings.CutPrefix(req.Path, "/files/")
 		if echoOk {
-			conn.Write([]byte(NewResponse("200 OK", PLAIN, []byte(echoStr))))
+			conn.Write([]byte((&Res{
+				Status: 200,
+				CType:  "text/plain",
+				Body:   []byte(echoStr),
+			}).String(enc)))
 		} else if filesOk && directory[0] == '/' {
 			p := path.Join(directory, filesStr)
 			if req.Method == "GET" {
-				handleSendFile(conn, p)
+				conn.Write([]byte(handleSendFile(p).String(enc)))
 			} else if req.Method == "POST" {
-				handleCreateFile(conn, p, req.Body)
+				conn.Write([]byte(handleCreateFile(p, req.Body).String(enc)))
 			} else {
-				conn.Write([]byte(NewResponse("405 Method Not Allowed", nil, []byte{})))
+				conn.Write([]byte((&Res{Status: 405}).String(enc)))
 			}
 		} else {
-			conn.Write([]byte(NewResponse("404 Not Found", nil, []byte{})))
+			conn.Write([]byte((&Res{Status: 404}).String(enc)))
 		}
 	}
 }
