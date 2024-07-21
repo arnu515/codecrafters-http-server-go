@@ -15,6 +15,8 @@ type HTTP1_1Request struct {
 	Body    []byte
 }
 
+var PLAIN = map[string]string{"content-type": "text/plain"}
+
 func NewResponse(status string, headers map[string]string, body []byte) string {
 	headersStr := ""
 	if headers != nil {
@@ -27,7 +29,7 @@ func NewResponse(status string, headers map[string]string, body []byte) string {
 }
 
 func ErrToRes(err error, status string) string {
-	return NewResponse(status, map[string]string{"Content-Type": "text/plain"}, []byte(err.Error()))
+	return NewResponse(status, PLAIN, []byte(err.Error()))
 }
 
 func parseFirstLine(line string) (string, string, error) {
@@ -39,22 +41,31 @@ func parseFirstLine(line string) (string, string, error) {
 	return b[0], b[1], nil
 }
 
-func parseRequest(req []byte) (*HTTP1_1Request, error) {
-	reqLen := len(req)
-	line1 := ""
-	for i := range reqLen {
-		if req[i] == '\r' && i+1 <= len(req) && req[i+1] == '\n' {
-			break
+func parseHeaders(headersRaw string) map[string]string {
+	headers := make(map[string]string)
+	for _, str := range strings.Split(headersRaw, "\r\n") {
+		k, v, ok := strings.Cut(str, ":")
+		if ok {
+			headers[strings.ToLower(strings.Trim(k, " "))] = strings.ToLower(strings.Trim(v, " "))
 		}
-		line1 += string(req[i])
 	}
-	method, path, err := parseFirstLine(line1)
+	return headers
+}
+
+func parseRequest(req []byte) (*HTTP1_1Request, error) {
+	// split[0] = first line and headers ; split[1] = body
+	split := strings.SplitN(string(req), "\r\n\r\n", 2)
+	// split2[0] = first line ; split2[1] = headers
+	split2 := strings.SplitN(split[0], "\r\n", 2)
+	method, path, err := parseFirstLine(split2[0])
 	if err != nil {
 		return nil, err
 	}
+	headers := parseHeaders(split2[1])
 	return &HTTP1_1Request{
-		Method: method,
-		Path:   path,
+		Method:  method,
+		Path:    path,
+		Headers: headers,
 	}, nil
 }
 
@@ -77,10 +88,12 @@ func handleConnection(conn net.Conn) {
 
 	if req.Path == "/" {
 		conn.Write([]byte(NewResponse("200 OK", nil, []byte{})))
+	} else if req.Path == "/user-agent" {
+		conn.Write([]byte(NewResponse("200 OK", PLAIN, []byte(req.Headers["user-agent"]))))
 	} else {
 		str, ok := strings.CutPrefix(req.Path, "/echo/")
 		if ok {
-			conn.Write([]byte(NewResponse("200 OK", map[string]string{"content-type": "text/plain"}, []byte(str))))
+			conn.Write([]byte(NewResponse("200 OK", PLAIN, []byte(str))))
 		} else {
 			conn.Write([]byte(NewResponse("404 Not Found", nil, []byte{})))
 		}
